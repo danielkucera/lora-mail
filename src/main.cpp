@@ -33,19 +33,28 @@
 #include <hal/hal.h>
 #include <SPI.h>
 
+#include <libmaple/pwr.h>
+#include <libmaple/scb.h>
+#include <libmaple/rcc.h>
+
+#include <STM32Sleep.h>
+
+
+RTClock rt(RTCSEL_LSE);
+long int alarmDelay = 30;
 
 // LoRaWAN NwkSKey, network session key
 // This is the default Semtech key, which is used by the early prototype TTN
 // network.
-static const PROGMEM u1_t NWKSKEY[16] = { 0x7D, 0x9B, 0x22, 0xD0, 0x6D, 0xD5, 0xDF, 0x9A, 0x46, 0xD5, 0x74, 0x4F, 0xB7, 0xD9, 0x4F, 0x86 };
+static const PROGMEM u1_t NWKSKEY[16] = { 0x8E, 0x44, 0xB9, 0x2C, 0x9A, 0x9E, 0x4E, 0x2E, 0x5E, 0x57, 0x8C, 0xC4, 0xB9, 0x9C, 0x58, 0xFB };
 
 // LoRaWAN AppSKey, application session key
 // This is the default Semtech key, which is used by the early prototype TTN
 // network.
-static const u1_t PROGMEM APPSKEY[16] = { 0xA5, 0x26, 0xED, 0x32, 0x50, 0xB4, 0x53, 0xC8, 0x8F, 0xDB, 0xD4, 0x9F, 0xA6, 0x31, 0xF6, 0x00 };
+static const u1_t PROGMEM APPSKEY[16] = { 0x25, 0x2A, 0x8A, 0x50, 0x36, 0x72, 0xD7, 0x9B, 0x43, 0xD9, 0x47, 0x9B, 0x0F, 0xC8, 0xEE, 0x42 };
 
 // LoRaWAN end-device address (DevAddr)
-static const u4_t DEVADDR = 0x260111F9 ; // <-- Change this address for every node!
+static const u4_t DEVADDR = 0x260116E4 ; // <-- Change this address for every node!
 
 // These callbacks are only used in over-the-air activation, so they are
 // left empty here (we cannot leave them out completely unless
@@ -54,15 +63,17 @@ void os_getArtEui (u1_t* buf) { }
 void os_getDevEui (u1_t* buf) { }
 void os_getDevKey (u1_t* buf) { }
 
-static uint8_t mydata[] = "Hello, world!";
+static uint8_t mydata[] = "!";
 static osjob_t sendjob;
 
 // Schedule TX every this many seconds (might become longer due to duty
 // cycle limitations).
-const unsigned TX_INTERVAL = 60;
+const unsigned TX_INTERVAL = 3600;
+
+int msg_sent = 0;
 
 // Pin mapping
-// https://github.com/rogerclarkmelbourne/Arduino_STM32/blob/4021c32fdb809f16a61c073d04e1d8c2c487a767/STM32F1/variants/generic_stm32f103c/board.cpp
+// https://github.com/rogerclarkmelboSerial3Serial3urne/Arduino_STM32/blob/4021c32fdb809f16a61c073d04e1d8c2c487a767/STM32F1/variants/generic_stm32f103c/board.cpp
 const lmic_pinmap lmic_pins = {
     .nss = 0, //PA0
     .rxtx = LMIC_UNUSED_PIN,
@@ -71,88 +82,166 @@ const lmic_pinmap lmic_pins = {
 };
 
 
-void do_send(osjob_t* j){
+void do_send() {
     // Check if there is not a current TX/RX job running
 
     if (LMIC.opmode & OP_TXRXPEND) {
-        Serial.println(F("OP_TXRXPEND, not sending"));
+        Serial3.println(F("OP_TXRXPEND, not sending"));
     } else {
         // Prepare upstream data transmission at the next possible time.
-        LMIC_setTxData2(1, mydata, sizeof(mydata)-1, 0);
-        Serial.println(F("Packet queued"));
+
+        LMIC_setTxData2(1, mydata, sizeof(mydata)-1, 1);
+        Serial3.println(F("Packet queued"));
+
     }
     // Next TX is scheduled after TX_COMPLETE event.
 }
 
+void sleepMode(bool deepSleepFlag){
+
+  // Disable ADC to save power
+  adc_disable_all();
+
+  // Set all GPIO pins to Analog input to save power (this disables pretty
+  // much all I/O incl. Serial3)
+  setGPIOModeToAllPins(GPIO_INPUT_ANALOG);
+
+  disableAllPeripheralClocks();
+
+    // Turn on Deepsleep bit
+    SCB_BASE->SCR |= SCB_SCR_SLEEPDEEP | SCB_SCR_SLEEPONEXIT;
+    // Setup Low Power Mode State and Shutdown
+    PWR_BASE->CR |= 0x4004; // Set LPR and LPMS_SHUTDOWN bits
+    // Clear WUFx bits
+    PWR_BASE->CSR &= ~PWR_CSR_WUF;
+
+    // Go to sleep
+      asm("    sev");
+      asm("    wfe");
+      asm("    wfe");
+}
+
+void sleepMode2(bool deepSleepFlag)
+{
+  // Clear PDDS and LPDS bits
+  PWR_BASE->CR &= PWR_CR_LPDS | PWR_CR_PDDS | PWR_CR_CWUF;
+
+  // Set PDDS and LPDS bits for standby mode, and set Clear WUF flag (required per datasheet):
+  PWR_BASE->CR |= PWR_CR_CWUF;
+  // Enable wakeup pin bit.
+  //PWR_BASE->CR |=  PWR_CSR_EWUP;
+
+  SCB_BASE->SCR |= SCB_SCR_SLEEPDEEP;
+
+  // only enabled interrupts or events can wakeup the processor, disabled interrupts are excluded
+  SCB_BASE->SCR &= ~SCB_SCR_SEVONPEND;
+
+  // System Control Register Bits. See...
+  // http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0497a/Cihhjgdh.html
+  if (deepSleepFlag) {
+    // Set Power down deepsleep bit.
+    PWR_BASE->CR |= PWR_CR_PDDS;
+    // Unset Low-power deepsleep.
+    PWR_BASE->CR &= ~PWR_CR_LPDS;
+  } else {
+    adc_disable(ADC1);
+    adc_disable(ADC2);
+#if STM32_HAVE_DAC
+    dac_disable_channel(DAC, 1);
+    dac_disable_channel(DAC, 2);
+#endif
+    //  Unset Power down deepsleep bit.
+    PWR_BASE->CR &= ~PWR_CR_PDDS;
+    // set Low-power deepsleep.
+    PWR_BASE->CR |= PWR_CR_LPDS;
+  }
+
+  // Now go into stop mode, wake up on interrupt
+  asm("    wfi");
+
+  // Clear SLEEPDEEP bit so we can use SLEEP mode
+  SCB_BASE->SCR &= ~SCB_SCR_SLEEPDEEP;
+}
+
 void onEvent (ev_t ev) {
-    Serial.print(os_getTime());
-    Serial.print(": ");
+    Serial3.print(os_getTime());
+    Serial3.print(": ");
     switch(ev) {
         case EV_SCAN_TIMEOUT:
-            Serial.println(F("EV_SCAN_TIMEOUT"));
+            Serial3.println(F("EV_SCAN_TIMEOUT"));
             break;
         case EV_BEACON_FOUND:
-            Serial.println(F("EV_BEACON_FOUND"));
+            Serial3.println(F("EV_BEACON_FOUND"));
             break;
         case EV_BEACON_MISSED:
-            Serial.println(F("EV_BEACON_MISSED"));
+            Serial3.println(F("EV_BEACON_MISSED"));
             break;
         case EV_BEACON_TRACKED:
-            Serial.println(F("EV_BEACON_TRACKED"));
+            Serial3.println(F("EV_BEACON_TRACKED"));
             break;
         case EV_JOINING:
-            Serial.println(F("EV_JOINING"));
+            Serial3.println(F("EV_JOINING"));
             break;
         case EV_JOINED:
-            Serial.println(F("EV_JOINED"));
+            Serial3.println(F("EV_JOINED"));
             break;
         case EV_RFU1:
-            Serial.println(F("EV_RFU1"));
+            Serial3.println(F("EV_RFU1"));
             break;
         case EV_JOIN_FAILED:
-            Serial.println(F("EV_JOIN_FAILED"));
+            Serial3.println(F("EV_JOIN_FAILED"));
             break;
         case EV_REJOIN_FAILED:
-            Serial.println(F("EV_REJOIN_FAILED"));
+            Serial3.println(F("EV_REJOIN_FAILED"));
             break;
         case EV_TXCOMPLETE:
-            Serial.println(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
-            if (LMIC.txrxFlags & TXRX_ACK)
-              Serial.println(F("Received ack"));
+            Serial3.println(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
+            if (LMIC.txrxFlags & TXRX_ACK){
+              Serial3.println(F("Received ack"));
+              Serial3.println(F("Radio shutdown"));
+
+              msg_sent=1;
+
+              //shutdown();
+            } else {
+              Serial3.println(F("No ACK, sending again"));
+              //os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL), do_send);
+              //do_send(&sendjob);
+            }
             if (LMIC.dataLen) {
-              Serial.println(F("Received "));
-              Serial.println(LMIC.dataLen);
-              Serial.println(F(" bytes of payload"));
+              Serial3.println(F("Received "));
+              Serial3.println(LMIC.dataLen);
+              Serial3.println(F(" bytes of payload"));
             }
             // Schedule next transmission
-            os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL), do_send);
             break;
         case EV_LOST_TSYNC:
-            Serial.println(F("EV_LOST_TSYNC"));
+            Serial3.println(F("EV_LOST_TSYNC"));
             break;
         case EV_RESET:
-            Serial.println(F("EV_RESET"));
+            Serial3.println(F("EV_RESET"));
             break;
         case EV_RXCOMPLETE:
             // data received in ping slot
-            Serial.println(F("EV_RXCOMPLETE"));
+            Serial3.println(F("EV_RXCOMPLETE"));
             break;
         case EV_LINK_DEAD:
-            Serial.println(F("EV_LINK_DEAD"));
+            Serial3.println(F("EV_LINK_DEAD"));
             break;
         case EV_LINK_ALIVE:
-            Serial.println(F("EV_LINK_ALIVE"));
+            Serial3.println(F("EV_LINK_ALIVE"));
             break;
          default:
-            Serial.println(F("Unknown event"));
+            Serial3.println(F("Unknown event"));
             break;
     }
 }
 
 void setup() {
     delay(3000);
-    Serial.begin(115200);
-    Serial.println(F("Starting"));
+
+    Serial3.begin(115200);
+    Serial3.println(F("Starting"));
 
     #ifdef VCC_ENABLE
     // For Pinoccio Scout boards
@@ -161,11 +250,11 @@ void setup() {
     delay(1000);
     #endif
 
-    Serial.println(F("os_init"));
+    Serial3.println(F("os_init"));
     // LMIC init
     os_init();
 
-    Serial.println(F("LMIC_reset"));
+    Serial3.println(F("LMIC_reset"));
     // Reset the MAC state. Session and pending data transfers will be discarded.
     LMIC_reset();
 
@@ -218,7 +307,7 @@ void setup() {
     #endif
 
     // Disable link check validation
-    LMIC_setLinkCheckMode(1);
+    LMIC_setLinkCheckMode(0);
 
     // TTN uses SF9 for its RX2 window.
     LMIC.dn2Dr = DR_SF9;
@@ -227,10 +316,44 @@ void setup() {
     LMIC_setDrTxpow(DR_SF7,14);
 
     // Start job
-    do_send(&sendjob);
+    do_send();
+
+//    return;
+/*
+
+
+    while (!msg_sent){
+      os_runloop_once();
+    }
+      LMIC_reset();
+      delay(500);
+      SPI.end();
+
+      noInterrupts();
+      //hal_disableIRQs();
+      sleepMode(0);
+      goToSleep(STANDBY);
+*/
 }
 
 void loop() {
-    //Serial.println(F("Loop running"));
-    os_runloop_once();
+  //sleepMode(1);
+  /*
+  return;
+*/
+    //Serial3.println(F("Loop running"));
+    if (!msg_sent){
+      os_runloop_once();
+    } else {
+      LMIC_shutdown();
+      //SPI.end();
+      delay(500);
+      //noInterrupts();
+      //hal_disableIRQs();
+      //sleepMode(1);
+      //sleepAndWakeUp(STANDBY, &rt, alarmDelay);
+      goToSleep(STANDBY);
+      //goToSleep(STOP);
+
+    }
 }
