@@ -37,10 +37,6 @@
 #include <libmaple/scb.h>
 #include <libmaple/rcc.h>
 
-#include <STM32Sleep.h>
-
-
-RTClock rt(RTCSEL_LSE);
 long int alarmDelay = 30;
 
 // LoRaWAN NwkSKey, network session key
@@ -95,72 +91,6 @@ void do_send() {
 
     }
     // Next TX is scheduled after TX_COMPLETE event.
-}
-
-void sleepMode(bool deepSleepFlag){
-
-  // Disable ADC to save power
-  adc_disable_all();
-
-  // Set all GPIO pins to Analog input to save power (this disables pretty
-  // much all I/O incl. Serial3)
-  setGPIOModeToAllPins(GPIO_INPUT_ANALOG);
-
-  disableAllPeripheralClocks();
-
-    // Turn on Deepsleep bit
-    SCB_BASE->SCR |= SCB_SCR_SLEEPDEEP | SCB_SCR_SLEEPONEXIT;
-    // Setup Low Power Mode State and Shutdown
-    PWR_BASE->CR |= 0x4004; // Set LPR and LPMS_SHUTDOWN bits
-    // Clear WUFx bits
-    PWR_BASE->CSR &= ~PWR_CSR_WUF;
-
-    // Go to sleep
-      asm("    sev");
-      asm("    wfe");
-      asm("    wfe");
-}
-
-void sleepMode2(bool deepSleepFlag)
-{
-  // Clear PDDS and LPDS bits
-  PWR_BASE->CR &= PWR_CR_LPDS | PWR_CR_PDDS | PWR_CR_CWUF;
-
-  // Set PDDS and LPDS bits for standby mode, and set Clear WUF flag (required per datasheet):
-  PWR_BASE->CR |= PWR_CR_CWUF;
-  // Enable wakeup pin bit.
-  //PWR_BASE->CR |=  PWR_CSR_EWUP;
-
-  SCB_BASE->SCR |= SCB_SCR_SLEEPDEEP;
-
-  // only enabled interrupts or events can wakeup the processor, disabled interrupts are excluded
-  SCB_BASE->SCR &= ~SCB_SCR_SEVONPEND;
-
-  // System Control Register Bits. See...
-  // http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0497a/Cihhjgdh.html
-  if (deepSleepFlag) {
-    // Set Power down deepsleep bit.
-    PWR_BASE->CR |= PWR_CR_PDDS;
-    // Unset Low-power deepsleep.
-    PWR_BASE->CR &= ~PWR_CR_LPDS;
-  } else {
-    adc_disable(ADC1);
-    adc_disable(ADC2);
-#if STM32_HAVE_DAC
-    dac_disable_channel(DAC, 1);
-    dac_disable_channel(DAC, 2);
-#endif
-    //  Unset Power down deepsleep bit.
-    PWR_BASE->CR &= ~PWR_CR_PDDS;
-    // set Low-power deepsleep.
-    PWR_BASE->CR |= PWR_CR_LPDS;
-  }
-
-  // Now go into stop mode, wake up on interrupt
-  asm("    wfi");
-
-  // Clear SLEEPDEEP bit so we can use SLEEP mode
-  SCB_BASE->SCR &= ~SCB_SCR_SLEEPDEEP;
 }
 
 void onEvent (ev_t ev) {
@@ -348,12 +278,7 @@ void loop() {
       LMIC_shutdown();
       //SPI.end();
       delay(500);
-      //noInterrupts();
-      //hal_disableIRQs();
-      //sleepMode(1);
-      //sleepAndWakeUp(STANDBY, &rt, alarmDelay);
-      goToSleep(STANDBY);
-      //goToSleep(STOP);
+
 
     }
 }
