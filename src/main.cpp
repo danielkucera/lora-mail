@@ -71,10 +71,10 @@ int msg_sent = 0;
 // Pin mapping
 // https://github.com/rogerclarkmelboSerial3Serial3urne/Arduino_STM32/blob/4021c32fdb809f16a61c073d04e1d8c2c487a767/STM32F1/variants/generic_stm32f103c/board.cpp
 const lmic_pinmap lmic_pins = {
-    .nss = 0, //PA0
+    .nss = 2, //PA0
     .rxtx = LMIC_UNUSED_PIN,
     .rst = 1, //PA1
-    .dio = {2, 3, LMIC_UNUSED_PIN},
+    .dio = {7, 8, LMIC_UNUSED_PIN},
 };
 
 
