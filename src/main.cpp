@@ -168,7 +168,14 @@ void onEvent (ev_t ev) {
 }
 
 void setup() {
-    delay(3000);
+    // keep board powered
+    pinMode(12, OUTPUT);
+    digitalWrite(12, HIGH);
+
+    pinMode(33, OUTPUT);
+    digitalWrite(33, HIGH);
+
+    //delay(3000);
 
     Serial3.begin(115200);
     Serial3.println(F("Starting"));
@@ -275,10 +282,10 @@ void loop() {
     if (!msg_sent){
       os_runloop_once();
     } else {
-      LMIC_shutdown();
+      //LMIC_shutdown();
       //SPI.end();
-      delay(500);
-
+      delay(5000);
+      digitalWrite(12, LOW);
 
     }
 }
